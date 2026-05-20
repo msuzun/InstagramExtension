@@ -200,6 +200,101 @@
       .igdl-btn:hover { background: rgba(0, 0, 0, 0.72) !important; }
       .igdl-btn:active { transform: scale(0.98) !important; }
       .igdl-btn svg { width: 16px !important; height: 16px !important; fill: currentColor !important; }
+
+      /* Story Lightbox (extension UI) */
+      .igstorylb-backdrop {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 2147483647 !important;
+        background: rgba(0,0,0,0.78) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 24px !important;
+        box-sizing: border-box !important;
+      }
+      .igstorylb-panel {
+        width: min(520px, 96vw) !important;
+        height: min(860px, 92vh) !important;
+        background: rgba(15, 15, 15, 0.92) !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        border-radius: 18px !important;
+        overflow: hidden !important;
+        box-shadow: 0 18px 60px rgba(0,0,0,0.45) !important;
+        backdrop-filter: blur(10px) !important;
+        -webkit-backdrop-filter: blur(10px) !important;
+        display: grid !important;
+        grid-template-rows: auto 1fr auto !important;
+      }
+      .igstorylb-header {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 12px !important;
+        padding: 12px 12px 10px 14px !important;
+        border-bottom: 1px solid rgba(255,255,255,0.10) !important;
+        color: #fff !important;
+        font: 600 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+      }
+      .igstorylb-title { opacity: 0.92 !important; }
+      .igstorylb-close {
+        width: 34px !important;
+        height: 34px !important;
+        border-radius: 999px !important;
+        background: rgba(255,255,255,0.10) !important;
+        border: 1px solid rgba(255,255,255,0.14) !important;
+        color: #fff !important;
+        cursor: pointer !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+      }
+      .igstorylb-close:hover { background: rgba(255,255,255,0.16) !important; }
+      .igstorylb-body {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 14px !important;
+        box-sizing: border-box !important;
+      }
+      .igstorylb-media {
+        width: 100% !important;
+        height: 100% !important;
+        border-radius: 14px !important;
+        overflow: hidden !important;
+        background: rgba(0,0,0,0.35) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+      }
+      .igstorylb-media img, .igstorylb-media video {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
+        background: #000 !important;
+      }
+      .igstorylb-footer {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 10px !important;
+        padding: 10px 12px 12px !important;
+        border-top: 1px solid rgba(255,255,255,0.10) !important;
+        color: rgba(255,255,255,0.86) !important;
+        font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+      }
+      .igstorylb-navbtn {
+        width: 38px !important;
+        height: 32px !important;
+        border-radius: 10px !important;
+        background: rgba(255,255,255,0.10) !important;
+        border: 1px solid rgba(255,255,255,0.14) !important;
+        color: #fff !important;
+        cursor: pointer !important;
+      }
+      .igstorylb-navbtn:disabled { opacity: 0.38 !important; cursor: default !important; }
+      .igstorylb-hint { opacity: 0.80 !important; }
     `;
     (document.documentElement || document.head || document).appendChild(style);
   }
@@ -614,6 +709,304 @@
     );
   }
 
+  // --- Story Lightbox (UI only) ---------------------------------------------
+
+  /**
+   * Important limitation:
+   * - This extension UI can display story media URLs, but it does NOT implement any
+   *   mechanism to bypass Instagram authentication/authorization or scrape private content.
+   * - To show stories, you must provide an allowed/authorized source of story media URLs.
+   *
+   * Provide stories via one of these options:
+   * - A user-provided endpoint you control (e.g. `https://your-domain/story?u=username`)
+   * - A compliant API/SDK flow that you’re authorized to use
+   *
+   * The provider below is a placeholder that returns an empty list by default.
+   */
+
+  const STORY = {
+    backdrop: null,
+    panel: null,
+    mediaWrap: null,
+    titleEl: null,
+    idxEl: null,
+    prevBtn: null,
+    nextBtn: null,
+    closeBtn: null,
+    items: /** @type {Array<{ url: string, type: 'image'|'video' }>} */ ([]),
+    index: 0,
+    username: ''
+  };
+
+  function getUsernameFromProfilePage() {
+    // Most reliable: path segment on profile pages: /{username}/
+    const m = location.pathname.match(/^\/([a-z0-9._]+)\/$/i);
+    if (m) return m[1];
+
+    // Fallback: meta / og tags
+    const og = document.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+    try {
+      const u = new URL(og);
+      const m2 = u.pathname.match(/^\/([a-z0-9._]+)\/$/i);
+      return m2 ? m2[1] : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function looksLikeStoryRingElement(el) {
+    if (!isElement(el)) return false;
+
+    // Instagram story rings are typically around an avatar: img alt contains username or "profile picture"
+    // We keep it heuristic, and restrict to profile pages to reduce false positives.
+    if (!/^\/[a-z0-9._]+\/$/i.test(location.pathname)) return false;
+
+    const avatarImg =
+      el.querySelector?.('img') ||
+      el.closest?.('header')?.querySelector?.('img') ||
+      null;
+    if (!avatarImg) return false;
+
+    const alt = normalizeText(avatarImg.getAttribute('alt') || '');
+    const hasAvatarAlt = alt.includes('profile') || alt.includes('profil') || alt.length > 0;
+    if (!hasAvatarAlt) return false;
+
+    // Visual cue: often clickable with cursor pointer
+    let cs;
+    try {
+      cs = window.getComputedStyle(el);
+    } catch {
+      cs = null;
+    }
+    if (cs && cs.cursor && cs.cursor !== 'pointer') {
+      // Still allow; not all rings set pointer on the outer node.
+    }
+
+    return true;
+  }
+
+  async function storyProviderFetch(username) {
+    // Placeholder provider. Return [] by default.
+    // Replace this with a compliant endpoint you control.
+    // Example skeleton (disabled):
+    // const res = await fetch(`https://your-domain.example/story?u=${encodeURIComponent(username)}`);
+    // if (!res.ok) return [];
+    // const data = await res.json();
+    // return Array.isArray(data?.items) ? data.items : [];
+    void username;
+    return [];
+  }
+
+  function storyLightboxClose() {
+    if (STORY.backdrop) {
+      STORY.backdrop.remove();
+      STORY.backdrop = null;
+    }
+    STORY.items = [];
+    STORY.index = 0;
+    STORY.username = '';
+  }
+
+  function storyLightboxRender() {
+    if (!STORY.mediaWrap) return;
+    STORY.mediaWrap.innerHTML = '';
+
+    const item = STORY.items[STORY.index];
+    if (!item) {
+      const msg = document.createElement('div');
+      msg.style.color = 'rgba(255,255,255,0.86)';
+      msg.style.font = '600 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+      msg.style.textAlign = 'center';
+      msg.textContent = 'Bu kullanıcı için story bulunamadı (veya sağlayıcı yapılandırılmadı).';
+      STORY.mediaWrap.appendChild(msg);
+    } else if (item.type === 'video') {
+      const v = document.createElement('video');
+      v.src = item.url;
+      v.controls = true;
+      v.autoplay = true;
+      v.playsInline = true;
+      STORY.mediaWrap.appendChild(v);
+    } else {
+      const img = document.createElement('img');
+      img.src = item.url;
+      img.alt = `story_${STORY.username}`;
+      STORY.mediaWrap.appendChild(img);
+    }
+
+    if (STORY.titleEl) STORY.titleEl.textContent = STORY.username ? `Story • @${STORY.username}` : 'Story';
+    if (STORY.idxEl) STORY.idxEl.textContent = STORY.items.length ? `${STORY.index + 1} / ${STORY.items.length}` : '';
+    if (STORY.prevBtn) STORY.prevBtn.disabled = STORY.index <= 0;
+    if (STORY.nextBtn) STORY.nextBtn.disabled = STORY.index >= STORY.items.length - 1;
+  }
+
+  function storyLightboxOpen({ username, items }) {
+    storyLightboxClose();
+
+    STORY.username = username;
+    STORY.items = Array.isArray(items) ? items : [];
+    STORY.index = 0;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'igstorylb-backdrop';
+    backdrop.tabIndex = -1;
+
+    const panel = document.createElement('div');
+    panel.className = 'igstorylb-panel';
+
+    const header = document.createElement('div');
+    header.className = 'igstorylb-header';
+    const title = document.createElement('div');
+    title.className = 'igstorylb-title';
+    title.textContent = username ? `Story • @${username}` : 'Story';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'igstorylb-close';
+    close.setAttribute('aria-label', 'Kapat');
+    close.title = 'Kapat';
+    close.textContent = '×';
+    header.appendChild(title);
+    header.appendChild(close);
+
+    const body = document.createElement('div');
+    body.className = 'igstorylb-body';
+    const media = document.createElement('div');
+    media.className = 'igstorylb-media';
+    body.appendChild(media);
+
+    const footer = document.createElement('div');
+    footer.className = 'igstorylb-footer';
+    const prev = document.createElement('button');
+    prev.type = 'button';
+    prev.className = 'igstorylb-navbtn';
+    prev.textContent = '←';
+    const hint = document.createElement('div');
+    hint.className = 'igstorylb-hint';
+    hint.textContent = '';
+    const next = document.createElement('button');
+    next.type = 'button';
+    next.className = 'igstorylb-navbtn';
+    next.textContent = '→';
+    footer.appendChild(prev);
+    footer.appendChild(hint);
+    footer.appendChild(next);
+
+    panel.appendChild(header);
+    panel.appendChild(body);
+    panel.appendChild(footer);
+    backdrop.appendChild(panel);
+    document.documentElement.appendChild(backdrop);
+
+    STORY.backdrop = backdrop;
+    STORY.panel = panel;
+    STORY.mediaWrap = media;
+    STORY.titleEl = title;
+    STORY.idxEl = hint;
+    STORY.prevBtn = prev;
+    STORY.nextBtn = next;
+    STORY.closeBtn = close;
+
+    const onClose = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      storyLightboxClose();
+    };
+    close.addEventListener('click', onClose);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) onClose(e);
+    });
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (!STORY.backdrop) return;
+        if (e.key === 'Escape') storyLightboxClose();
+        if (e.key === 'ArrowLeft') {
+          if (STORY.index > 0) {
+            STORY.index--;
+            storyLightboxRender();
+          }
+        }
+        if (e.key === 'ArrowRight') {
+          if (STORY.index < STORY.items.length - 1) {
+            STORY.index++;
+            storyLightboxRender();
+          }
+        }
+      },
+      { capture: true }
+    );
+
+    prev.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (STORY.index > 0) {
+        STORY.index--;
+        storyLightboxRender();
+      }
+    });
+    next.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (STORY.index < STORY.items.length - 1) {
+        STORY.index++;
+        storyLightboxRender();
+      }
+    });
+
+    storyLightboxRender();
+  }
+
+  function installStoryRingInterceptor() {
+    // Capture click at the top to prevent IG from triggering its own story viewer/login redirect.
+    document.addEventListener(
+      'click',
+      async (e) => {
+        const t = e.target && e.target.nodeType === 1 ? e.target : null;
+        if (!t) return;
+
+        // Only on profile pages.
+        const username = getUsernameFromProfilePage();
+        if (!username) return;
+
+        // Heuristic: user clicked somewhere on/near avatar ring.
+        const candidate =
+          t.closest?.('header')?.querySelector?.('canvas, svg, img')?.closest?.('a, button, div') ||
+          t.closest?.('header') ||
+          t.closest?.('a, button, div');
+
+        if (!candidate || !looksLikeStoryRingElement(candidate)) return;
+
+        // Hard-stop the default behavior
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+
+        // Open UI immediately (no flicker), then load asynchronously.
+        storyLightboxOpen({ username, items: [] });
+
+        try {
+          const items = await storyProviderFetch(username);
+          // Validate items structure
+          const safeItems = Array.isArray(items)
+            ? items
+                .filter((it) => it && typeof it.url === 'string' && isHttpUrl(it.url))
+                .map((it) => ({
+                  url: String(it.url),
+                  type: it.type === 'video' ? 'video' : 'image'
+                }))
+            : [];
+          STORY.items = safeItems;
+          STORY.index = 0;
+          storyLightboxRender();
+        } catch {
+          STORY.items = [];
+          STORY.index = 0;
+          storyLightboxRender();
+        }
+      },
+      true
+    );
+  }
+
   // --- Efficient SPA watching ------------------------------------------------
 
   let scheduled = false;
@@ -782,6 +1175,7 @@
   installHistoryGuards();
   installClickGuards();
   installDownloadClickHandler();
+  installStoryRingInterceptor();
 
   // Ensure we start observing as soon as possible.
   if (document.readyState === 'loading') {
