@@ -164,6 +164,18 @@
         overscroll-behavior: auto !important;
         touch-action: auto !important;
       }
+
+      /* Unlock common UI interaction locks on media */
+      img, video, a {
+        pointer-events: auto !important;
+        user-select: auto !important;
+        -webkit-user-select: auto !important;
+      }
+
+      /* Some overlays rely on "no select" / "no callout" behavior */
+      * {
+        -webkit-touch-callout: default !important;
+      }
     `;
     (document.documentElement || document.head || document).appendChild(style);
   }
@@ -249,6 +261,165 @@
     return removed;
   }
 
+  // --- Media interaction unlock (right click / middle click / overlays) ------
+
+  const POST_LINK_SELECTORS = [
+    'a[href^="/p/"]',
+    'a[href^="/reel/"]',
+    'a[href^="/tv/"]'
+  ].join(',');
+
+  function setImportantStyle(el, prop, value) {
+    try {
+      el.style.setProperty(prop, value, 'important');
+    } catch {
+      // ignore
+    }
+  }
+
+  function rectCovers(a, b) {
+    // Does rect A cover most of rect B?
+    const iw = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const ih = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    if (iw <= 0 || ih <= 0) return false;
+    const inter = iw * ih;
+    const areaB = Math.max(1, b.width * b.height);
+    return inter / areaB >= 0.75;
+  }
+
+  function looksLikeTransparentClickShield(el, mediaRect) {
+    if (!isElement(el)) return false;
+    let cs;
+    try {
+      cs = window.getComputedStyle(el);
+    } catch {
+      cs = null;
+    }
+    if (!cs) return false;
+
+    // Overlay-like positioning
+    if (!(cs.position === 'absolute' || cs.position === 'fixed')) return false;
+    if (cs.pointerEvents === 'none') return false; // already not blocking
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+
+    // Transparent / near-transparent background is common for shields
+    const bg = cs.backgroundColor || '';
+    const transparentLike = bg === 'transparent' || bg.endsWith(', 0)') || bg === 'rgba(0, 0, 0, 0)';
+
+    // Covers the media area
+    const r = el.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return false;
+    if (!rectCovers(r, mediaRect)) return false;
+
+    // Conservative: either transparent-like OR no meaningful content
+    const noText = !normalizeText(el.textContent || '');
+    return transparentLike || noText;
+  }
+
+  function unlockMediaContainer(container) {
+    if (!isElement(container)) return 0;
+
+    // If IG applied pointer-events/user-select locks to the container, override.
+    setImportantStyle(container, 'pointer-events', 'auto');
+    setImportantStyle(container, 'user-select', 'auto');
+    setImportantStyle(container, '-webkit-user-select', 'auto');
+
+    const media = container.querySelector('img, video');
+    if (!media) return 0;
+
+    setImportantStyle(media, 'pointer-events', 'auto');
+    setImportantStyle(media, 'user-select', 'auto');
+    setImportantStyle(media, '-webkit-user-select', 'auto');
+
+    const mediaRect = media.getBoundingClientRect();
+    if (mediaRect.width < 10 || mediaRect.height < 10) return 0;
+
+    // Find overlay children that are likely shields.
+    // Bound work: do not scan too deep.
+    const children = container.querySelectorAll('div, span');
+    let changed = 0;
+    let scanned = 0;
+
+    for (const el of children) {
+      if (++scanned > 80) break;
+      if (!isElement(el) || el === media) continue;
+      if (!looksLikeTransparentClickShield(el, mediaRect)) continue;
+
+      // Prefer neutralizing rather than removing to reduce layout risk.
+      setImportantStyle(el, 'pointer-events', 'none');
+      changed++;
+    }
+
+    return changed;
+  }
+
+  function ensurePostAnchorsWork() {
+    // Ensure post anchors can receive middle-click and have pointer-events enabled.
+    const links = document.querySelectorAll(POST_LINK_SELECTORS);
+    let touched = 0;
+    let scanned = 0;
+    for (const a of links) {
+      if (++scanned > 200) break;
+      if (!isElement(a)) continue;
+      if (!a.getAttribute('href')) continue;
+      setImportantStyle(a, 'pointer-events', 'auto');
+      touched++;
+    }
+    return touched;
+  }
+
+  function unlockMediaInteractions() {
+    const containers = document.querySelectorAll('article, main, section');
+    let changed = 0;
+    let scanned = 0;
+
+    for (const c of containers) {
+      if (++scanned > 80) break;
+      if (!isElement(c)) continue;
+
+      // Prefer processing around known post anchors first.
+      const links = c.querySelectorAll(POST_LINK_SELECTORS);
+      let linkScanned = 0;
+      for (const a of links) {
+        if (++linkScanned > 20) break;
+        const container = a.closest('article') || a.parentElement || c;
+        changed += unlockMediaContainer(container);
+      }
+    }
+
+    changed += ensurePostAnchorsWork();
+    return changed;
+  }
+
+  function installClickGuards() {
+    // Prevent IG from cancelling context menu / middle click on media and post links.
+    // We stop propagation early (capture) but do NOT preventDefault.
+    const stopIfRelevant = (e) => {
+      const t = /** @type {Element|null} */ (e.target && e.target.nodeType === 1 ? e.target : null);
+      if (!t) return;
+
+      // If event originated on a media element or inside a post link, we let browser defaults win.
+      const inPostLink = !!t.closest?.(POST_LINK_SELECTORS);
+      const isMedia = t.matches?.('img, video') || !!t.closest?.('img, video');
+
+      if (!inPostLink && !isMedia) return;
+
+      // Do not block left-click navigation; only unlock right-click & middle-click behaviors.
+      if (e.type === 'auxclick') {
+        // button: 1 = middle
+        if (e.button !== 1) return;
+      }
+
+      e.stopPropagation();
+      // stopImmediatePropagation is stronger; helps when IG installs multiple capture handlers.
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    };
+
+    window.addEventListener('contextmenu', stopIfRelevant, true);
+    window.addEventListener('auxclick', stopIfRelevant, true);
+    window.addEventListener('mousedown', stopIfRelevant, true);
+  }
+
   // --- Efficient SPA watching ------------------------------------------------
 
   let scheduled = false;
@@ -274,6 +445,7 @@
       ensureScrollOverrideStyle();
       unlockScrollInline();
       removeLoginModals();
+      unlockMediaInteractions();
 
       // SPA may attempt to move user into auth/login routes; push back to last good URL.
       enforceSafeLocation();
@@ -413,6 +585,7 @@
 
   // Guard SPA history-based "redirects" ASAP.
   installHistoryGuards();
+  installClickGuards();
 
   // Ensure we start observing as soon as possible.
   if (document.readyState === 'loading') {
