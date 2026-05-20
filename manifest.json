@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Instagram Scroll Unlock (Stage 1)",
+  "version": "0.1.0",
+  "description": "Removes login modal on public Instagram pages and keeps scrolling enabled.",
+  "content_scripts": [
+    {
+      "matches": ["https://*.instagram.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "host_permissions": ["https://*.instagram.com/*"]
+}
