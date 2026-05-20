@@ -13,6 +13,15 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["tabs", "webNavigation"],
-  "host_permissions": ["https://*.instagram.com/*"]
+  "permissions": ["tabs", "webNavigation", "declarativeNetRequest"],
+  "host_permissions": ["https://*.instagram.com/*"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ig_ruleset",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
 }

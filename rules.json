@@ -1,0 +1,48 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https:\\/\\/([a-z0-9-]+\\.)?instagram\\.com\\/api\\/v1\\/web\\/accounts\\/login\\/ajax\\/",
+      "resourceTypes": ["xmlhttprequest", "fetch"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https:\\/\\/([a-z0-9-]+\\.)?instagram\\.com\\/api\\/v1\\/web\\/accounts\\/(signup|web_create_ajax)\\/",
+      "resourceTypes": ["xmlhttprequest", "fetch"]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https:\\/\\/([a-z0-9-]+\\.)?instagram\\.com\\/accounts\\/(login|signup)\\/",
+      "resourceTypes": ["xmlhttprequest", "fetch", "sub_frame"]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https:\\/\\/([a-z0-9-]+\\.)?instagram\\.com\\/(challenge|oauth)\\/",
+      "resourceTypes": ["xmlhttprequest", "fetch", "sub_frame"]
+    }
+  },
+  {
+    "id": 10,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https:\\/\\/([a-z0-9-]+\\.)?instagram\\.com\\/api\\/v1\\/web\\/logging_client_events\\/",
+      "resourceTypes": ["xmlhttprequest", "fetch"]
+    }
+  }
+]
+
