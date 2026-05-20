@@ -40,6 +40,10 @@
 
   const MAX_TEXT_SCAN_CHARS = 3500; // Prevent expensive textContent scans on huge nodes.
 
+  // Auth/login-like paths we want to prevent (SPA + hard redirects safety net).
+  const BLOCK_PATH_RE =
+    /^\/(accounts\/login\/?|accounts\/signup\/?|challenge\/?|login\/?|auth\/?|oauth\/?)/i;
+
   // --- Utilities -------------------------------------------------------------
 
   /** Lowercase + collapse whitespace for resilient keyword matching. */
@@ -68,6 +72,25 @@
 
   function isElement(el) {
     return el && el.nodeType === Node.ELEMENT_NODE;
+  }
+
+  function isBlockedAuthLocation(urlLike) {
+    try {
+      const u = new URL(String(urlLike), location.origin);
+      if (u.origin !== location.origin) return false;
+      return BLOCK_PATH_RE.test(u.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  function safeSendUrlToBackground(url) {
+    // content_scripts can message the service worker (no extra permissions needed)
+    try {
+      chrome.runtime?.sendMessage?.({ type: 'IG_URL_UPDATE', url: String(url) });
+    } catch {
+      // ignore (e.g. chrome not available in some environments)
+    }
   }
 
   /**
@@ -251,6 +274,9 @@
       ensureScrollOverrideStyle();
       unlockScrollInline();
       removeLoginModals();
+
+      // SPA may attempt to move user into auth/login routes; push back to last good URL.
+      enforceSafeLocation();
     };
 
     if (typeof requestAnimationFrame === 'function') {
@@ -258,6 +284,83 @@
     } else {
       setTimeout(run, 0);
     }
+  }
+
+  // --- SPA redirect prevention (History API) --------------------------------
+
+  let lastGoodUrl = location.href;
+  let lastGoodRecordedAt = 0;
+  const MIN_GOOD_URL_INTERVAL_MS = 200;
+
+  function recordGoodUrl(url) {
+    if (!url || isBlockedAuthLocation(url)) return;
+    const now = performance.now();
+    if (now - lastGoodRecordedAt < MIN_GOOD_URL_INTERVAL_MS) return;
+    lastGoodRecordedAt = now;
+    lastGoodUrl = String(url);
+    safeSendUrlToBackground(lastGoodUrl);
+  }
+
+  function restoreToLastGoodUrl() {
+    if (!lastGoodUrl || lastGoodUrl === location.href) return;
+    try {
+      history.replaceState(history.state, '', lastGoodUrl);
+      // Some cases need a direct assignment to force location.
+      if (location.href !== lastGoodUrl) {
+        location.href = lastGoodUrl;
+      }
+    } catch {
+      try {
+        location.href = lastGoodUrl;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function enforceSafeLocation() {
+    if (isBlockedAuthLocation(location.href)) {
+      restoreToLastGoodUrl();
+      return;
+    }
+    recordGoodUrl(location.href);
+  }
+
+  function installHistoryGuards() {
+    // Record the initial URL (if it's safe).
+    recordGoodUrl(location.href);
+
+    const origPushState = history.pushState.bind(history);
+    const origReplaceState = history.replaceState.bind(history);
+
+    function guardedNavigate(originalFn, args) {
+      const urlArg = args?.[2];
+      if (urlArg && isBlockedAuthLocation(urlArg)) {
+        // Block SPA attempt to push/replace into login/auth routes.
+        restoreToLastGoodUrl();
+        return;
+      }
+      const result = originalFn(...args);
+      // Schedule a safe check because IG sometimes mutates URL then DOM.
+      scheduleSweep('history');
+      return result;
+    }
+
+    history.pushState = function (...args) {
+      return guardedNavigate(origPushState, args);
+    };
+
+    history.replaceState = function (...args) {
+      return guardedNavigate(origReplaceState, args);
+    };
+
+    window.addEventListener(
+      'popstate',
+      () => {
+        scheduleSweep('popstate');
+      },
+      { capture: true }
+    );
   }
 
   function startObserver() {
@@ -307,6 +410,9 @@
 
   // Early sweep (document_start) to prevent initial lock.
   scheduleSweep('boot');
+
+  // Guard SPA history-based "redirects" ASAP.
+  installHistoryGuards();
 
   // Ensure we start observing as soon as possible.
   if (document.readyState === 'loading') {
