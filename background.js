@@ -90,6 +90,52 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   setLastGoodUrl(tabId, url);
 });
 
+function sanitizeFilenamePart(s) {
+  return String(s || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 140);
+}
+
+function guessExtensionFromUrl(urlString) {
+  try {
+    const u = new URL(urlString);
+    const m = u.pathname.toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+    if (!m) return '';
+    const ext = m[1];
+    // Basic allow-list for sanity
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm', 'mov'].includes(ext)) return ext;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+async function downloadMedia({ url, filename }) {
+  if (typeof url !== 'string' || !isInstagramUrl(url)) return;
+  const ext = guessExtensionFromUrl(url);
+  const safeName = sanitizeFilenamePart(filename || 'instagram_media');
+  const finalName = ext && !safeName.toLowerCase().endsWith(`.${ext}`) ? `${safeName}.${ext}` : safeName;
+
+  try {
+    await chrome.downloads.download({
+      url,
+      filename: finalName,
+      saveAs: false,
+      conflictAction: 'uniquify'
+    });
+  } catch {
+    // ignore: download may fail due to permissions/CORS/private content
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.type !== 'IG_DOWNLOAD_MEDIA') return;
+  const url = msg?.url;
+  const filename = msg?.filename;
+  downloadMedia({ url, filename });
+});
+
 // Track normal navigations and detect auth/login redirects.
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   // main frame only

@@ -176,6 +176,30 @@
       * {
         -webkit-touch-callout: default !important;
       }
+
+      /* Download button injected by the extension */
+      .igdl-btn {
+        position: absolute !important;
+        top: 8px !important;
+        right: 8px !important;
+        z-index: 2147483646 !important;
+        width: 30px !important;
+        height: 30px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 999px !important;
+        background: rgba(0, 0, 0, 0.55) !important;
+        color: #fff !important;
+        border: 1px solid rgba(255, 255, 255, 0.18) !important;
+        cursor: pointer !important;
+        pointer-events: auto !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+      }
+      .igdl-btn:hover { background: rgba(0, 0, 0, 0.72) !important; }
+      .igdl-btn:active { transform: scale(0.98) !important; }
+      .igdl-btn svg { width: 16px !important; height: 16px !important; fill: currentColor !important; }
     `;
     (document.documentElement || document.head || document).appendChild(style);
   }
@@ -420,6 +444,176 @@
     window.addEventListener('mousedown', stopIfRelevant, true);
   }
 
+  // --- Download button injection --------------------------------------------
+
+  const DOWNLOAD_BTN_CLASS = 'igdl-btn';
+  const DOWNLOAD_BTN_ATTR = 'data-igdl-btn';
+  const POST_ROOT_ATTR = 'data-igdl-root';
+
+  function isHttpUrl(url) {
+    try {
+      const u = new URL(String(url));
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function parseSrcsetBestUrl(srcset) {
+    // Pick the largest width candidate.
+    // srcset format: "url 320w, url2 640w, ..."
+    const parts = String(srcset || '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    let best = { url: '', w: 0 };
+    for (const p of parts) {
+      const m = p.match(/^(\S+)\s+(\d+)w$/);
+      if (!m) continue;
+      const url = m[1];
+      const w = Number.parseInt(m[2], 10);
+      if (Number.isFinite(w) && w > best.w && isHttpUrl(url)) best = { url, w };
+    }
+    return best.url || '';
+  }
+
+  function getBestMediaUrlFromRoot(root) {
+    if (!isElement(root)) return null;
+
+    // Prefer video if present (reels/posts)
+    const vid = root.querySelector('video');
+    if (vid) {
+      const url = vid.currentSrc || vid.src;
+      if (url && isHttpUrl(url)) return { url, kind: 'video' };
+    }
+
+    // Find the "best" image by srcset width, then natural size fallback.
+    const imgs = root.querySelectorAll('img');
+    let best = { url: '', score: 0 };
+    for (const img of imgs) {
+      if (!img) continue;
+      const fromSrcset = parseSrcsetBestUrl(img.getAttribute('srcset'));
+      const url = fromSrcset || img.currentSrc || img.src || '';
+      if (!url || !isHttpUrl(url)) continue;
+      const nw = Number(img.naturalWidth || 0);
+      const nh = Number(img.naturalHeight || 0);
+      const score = Math.max(1, nw * nh);
+      if (score > best.score) best = { url, score };
+    }
+    if (best.url) return { url: best.url, kind: 'image' };
+
+    return null;
+  }
+
+  function findPostRootForButton(btnEl) {
+    const root = btnEl.closest?.(`[${POST_ROOT_ATTR}="1"]`);
+    if (root) return root;
+    // Fallback: the closest article (IG posts) or main section.
+    return btnEl.closest?.('article') || btnEl.closest?.('main') || document.body;
+  }
+
+  function inferShortcodeFromLink(root) {
+    const a = root?.querySelector?.(POST_LINK_SELECTORS);
+    const href = a?.getAttribute?.('href') || '';
+    const m = href.match(/^\/(p|reel|tv)\/([^/]+)\//i);
+    return m ? m[2] : '';
+  }
+
+  function sendDownloadRequest({ url, kind, shortcode }) {
+    const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');
+    const code = shortcode ? `_${shortcode}` : '';
+    const base = `instagram_media${code}_${ts}_${kind}`;
+    try {
+      chrome.runtime?.sendMessage?.({
+        type: 'IG_DOWNLOAD_MEDIA',
+        url,
+        filename: base
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  function injectDownloadButtonInto(root) {
+    if (!isElement(root)) return 0;
+    // Mark a post root so the button can reliably find context.
+    root.setAttribute(POST_ROOT_ATTR, '1');
+
+    if (root.querySelector?.(`.${DOWNLOAD_BTN_CLASS}[${DOWNLOAD_BTN_ATTR}="1"]`)) return 0;
+
+    // Ensure the root can anchor absolute-positioned button.
+    const cs = window.getComputedStyle(root);
+    if (cs.position === 'static') {
+      setImportantStyle(root, 'position', 'relative');
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = DOWNLOAD_BTN_CLASS;
+    btn.setAttribute(DOWNLOAD_BTN_ATTR, '1');
+    btn.setAttribute('aria-label', 'İndir');
+    btn.title = 'İndir';
+
+    // Minimal download icon (inline SVG)
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4.0 4a1 1 0 0 1-1.4 0l-4.0-4a1 1 0 1 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1zM5 20a1 1 0 0 1-1-1v-2a1 1 0 1 1 2 0v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5z"/></svg>';
+
+    root.appendChild(btn);
+    return 1;
+  }
+
+  function injectDownloadButtons() {
+    // Find likely post/reel roots.
+    // Bound work: keep scanning limited per sweep.
+    const roots = new Set();
+
+    // Primary: each article is usually a post in feed.
+    document.querySelectorAll('article').forEach((a) => roots.add(a));
+
+    // Secondary: single post/reel pages still contain an article; but as a fallback,
+    // use containers around known post links.
+    const links = document.querySelectorAll(POST_LINK_SELECTORS);
+    let scanned = 0;
+    for (const a of links) {
+      if (++scanned > 120) break;
+      const r = a.closest('article') || a.closest('main') || a.parentElement;
+      if (r) roots.add(r);
+    }
+
+    let injected = 0;
+    let processed = 0;
+    for (const r of roots) {
+      if (++processed > 80) break;
+      injected += injectDownloadButtonInto(r);
+    }
+    return injected;
+  }
+
+  function installDownloadClickHandler() {
+    document.addEventListener(
+      'click',
+      (e) => {
+        const t = e.target && e.target.nodeType === 1 ? e.target : null;
+        if (!t) return;
+        const btn = t.closest?.(`.${DOWNLOAD_BTN_CLASS}[${DOWNLOAD_BTN_ATTR}="1"]`);
+        if (!btn) return;
+
+        // Keep click local (avoid triggering IG overlay navigation).
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+
+        const root = findPostRootForButton(btn);
+        const best = getBestMediaUrlFromRoot(root);
+        if (!best) return;
+
+        const shortcode = inferShortcodeFromLink(root);
+        sendDownloadRequest({ url: best.url, kind: best.kind, shortcode });
+      },
+      true
+    );
+  }
+
   // --- Efficient SPA watching ------------------------------------------------
 
   let scheduled = false;
@@ -446,6 +640,7 @@
       unlockScrollInline();
       removeLoginModals();
       unlockMediaInteractions();
+      injectDownloadButtons();
 
       // SPA may attempt to move user into auth/login routes; push back to last good URL.
       enforceSafeLocation();
@@ -586,6 +781,7 @@
   // Guard SPA history-based "redirects" ASAP.
   installHistoryGuards();
   installClickGuards();
+  installDownloadClickHandler();
 
   // Ensure we start observing as soon as possible.
   if (document.readyState === 'loading') {

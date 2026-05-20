@@ -13,7 +13,7 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["tabs", "webNavigation", "declarativeNetRequest"],
+  "permissions": ["tabs", "webNavigation", "declarativeNetRequest", "downloads"],
   "host_permissions": ["https://*.instagram.com/*"],
   "declarative_net_request": {
     "rule_resources": [
